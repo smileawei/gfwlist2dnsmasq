@@ -1,0 +1,21 @@
+services:
+  dnsmasq-chn:
+    build: .
+    image: dnsmasq-chn:local
+    container_name: dnsmasq-chn
+    restart: unless-stopped
+    # bridge network with non-standard port (host's 53 is occupied by systemd-resolved).
+    # Clients query DNS_PORT on the host's IP. Switch to network_mode: host if you free up 53.
+    ports:
+      - "${DNS_PORT:-5300}:53/udp"
+      - "${DNS_PORT:-5300}:53/tcp"
+    env_file:
+      - .env
+    volumes:
+      - ./conf:/opt/dnsmasq-chn/conf:ro
+      - ./data:/etc/dnsmasq.d
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
