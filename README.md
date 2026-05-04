@@ -36,6 +36,52 @@ dig @127.0.0.1 -p 5300 baidu.com    # 国内域名 → DEFAULT_UPSTREAM
 dig @127.0.0.1 -p 5300 google.com   # 墙外域名 → GFW_UPSTREAM_IP
 ```
 
+## 在其他机器部署（不 clone repo）
+
+只需要三样：`docker-compose.yml` + `.env` + 一个空的 `conf/` 目录。
+
+```bash
+mkdir dnsmasq-chn && cd dnsmasq-chn
+mkdir -p conf data
+touch conf/customize.conf conf/ulock.list   # 空文件即可，dnsmasq.conf 里 conf-file= 引用了它们
+```
+
+`.env`：
+
+```bash
+GFW_UPSTREAM_IP=10.220.10.253
+GFW_UPSTREAM_PORT=53
+DEFAULT_UPSTREAM=223.5.5.5 119.29.29.29
+UPDATE_CRON=0 4 * * *
+TZ=Asia/Shanghai
+DNS_PORT=5300
+```
+
+`docker-compose.yml`（去掉 `build:`，只拉 Hub 镜像）：
+
+```yaml
+services:
+  dnsmasq-chn:
+    image: smileawei/gfwlist2dnsmasq:latest
+    container_name: dnsmasq-chn
+    restart: unless-stopped
+    ports:
+      - "${DNS_PORT:-5300}:53/udp"
+      - "${DNS_PORT:-5300}:53/tcp"
+    env_file: [.env]
+    volumes:
+      - ./conf:/opt/dnsmasq-chn/conf:ro
+      - ./data:/etc/dnsmasq.d
+```
+
+```bash
+docker compose pull && docker compose up -d
+docker compose logs -f
+dig @127.0.0.1 -p 5300 google.com
+```
+
+升级：`docker compose pull && docker compose up -d`。
+
 ## 配置 (`.env`)
 
 | 变量 | 说明 | 示例 |
