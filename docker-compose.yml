@@ -1,7 +1,8 @@
 services:
   dnsmasq-chn:
+    image: smileawei/gfwlist2dnsmasq:latest
+    # comment out `build: .` to skip local build and just `docker compose pull` from Docker Hub
     build: .
-    image: dnsmasq-chn:local
     container_name: dnsmasq-chn
     restart: unless-stopped
     # bridge network with non-standard port (host's 53 is occupied by systemd-resolved).

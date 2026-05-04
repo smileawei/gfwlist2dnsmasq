@@ -1,6 +1,11 @@
 # dnsmasq-chn
 
+[![Build and publish Docker image](https://github.com/smileawei/gfwlist2dnsmasq/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/smileawei/gfwlist2dnsmasq/actions/workflows/docker-publish.yml)
+[![Docker Hub](https://img.shields.io/docker/pulls/smileawei/gfwlist2dnsmasq.svg)](https://hub.docker.com/r/smileawei/gfwlist2dnsmasq)
+
 容器化的 dnsmasq，做中国大陆环境的 DNS 分流：墙外域名走指定上游，国内域名走默认上游，每天自动刷新 gfwlist 规则并热重载。
+
+镜像：`smileawei/gfwlist2dnsmasq` （多架构 amd64 / arm64）
 
 ## 工作机制
 
@@ -22,8 +27,9 @@ client → dnsmasq ─┤
 cp .env.example .env
 $EDITOR .env
 
-# 2. 启动
-docker compose up -d --build
+# 2. 启动 —— 二选一
+docker compose up -d --build       # 本地 build
+docker compose pull && docker compose up -d   # 从 Docker Hub 拉镜像
 
 # 3. 测试
 dig @127.0.0.1 -p 5300 baidu.com    # 国内域名 → DEFAULT_UPSTREAM
