@@ -86,7 +86,7 @@ python3 -B -m unittest discover -s tests -v
 bash tests/test_gfwlist_generator.sh
 ```
 
-## 快速开始
+## 快速开始（已克隆仓库）
 
 ```bash
 # 1. 拷贝并编辑环境变量
@@ -97,23 +97,30 @@ $EDITOR .env
 docker compose up -d --build       # 本地 build
 docker compose pull && docker compose up -d   # 从 Docker Hub 拉镜像
 
-# 3. 测试
-dig @127.0.0.1 -p 5300 baidu.com    # 国内域名 → DEFAULT_UPSTREAM
-dig @127.0.0.1 -p 5300 google.com   # 墙外域名 → GFW_UPSTREAM_IP
+# 3. 使用容器自带的 dig 测试
+docker compose exec dnsmasq-chn dig @127.0.0.1 baidu.com    # 默认上游
+docker compose exec dnsmasq-chn dig @127.0.0.1 google.com   # GFW 上游
 ```
 
-## 在其他机器部署（不 clone repo）
+## 全新部署（使用已发布镜像）
 
-准备 `docker-compose.yml`、`.env`，以及配置和数据目录。手工规则目录可以为空。
+在已安装 Docker、可运行 `docker compose` 的新机器上操作。以下以 `/opt/dnsmasq-chn` 为部署目录，准备两个配置文件和两个目录即可。
+
+### 1. 创建目录
 
 ```bash
-mkdir dnsmasq-chn && cd dnsmasq-chn
-mkdir -p conf/upstreams data
+mkdir -p /opt/dnsmasq-chn/conf/upstreams /opt/dnsmasq-chn/data
+chmod 755 /opt/dnsmasq-chn/data
+cd /opt/dnsmasq-chn
 ```
 
-`.env`：
+`conf/upstreams/` 可以为空。`data/` 需允许降权运行的 dnsmasq 读取规则，文件内容由程序生成，无需手工创建。
 
-```bash
+### 2. 配置上游与端口
+
+创建 `/opt/dnsmasq-chn/.env`：
+
+```dotenv
 GFW_UPSTREAM_IP=10.220.10.253
 GFW_UPSTREAM_PORT=53
 DEFAULT_UPSTREAM=223.5.5.5 119.29.29.29
@@ -122,7 +129,11 @@ TZ=Asia/Shanghai
 DNS_PORT=5300
 ```
 
-`docker-compose.yml`（去掉 `build:`，只拉 Hub 镜像）：
+将 `GFW_UPSTREAM_IP` 改为新机器能够访问的分流 DNS。示例中的 `10.220.10.253` 是原部署网络内的地址，仅当新机器也能访问它时才可沿用。
+
+### 3. 创建 Compose 配置
+
+创建 `/opt/dnsmasq-chn/docker-compose.yml`：
 
 ```yaml
 services:
@@ -133,21 +144,84 @@ services:
     ports:
       - "${DNS_PORT:-5300}:53/udp"
       - "${DNS_PORT:-5300}:53/tcp"
-    env_file: [.env]
+    env_file:
+      - .env
     volumes:
       - ./conf:/opt/dnsmasq-chn/conf:ro
       - ./data:/etc/dnsmasq.d
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 ```
+
+此配置直接拉取已发布镜像，无需复制源码、脚本或主配置文件。
+
+### 4. 启动并检查首次更新
 
 ```bash
-docker compose pull && docker compose up -d
-docker compose logs -f
-dig @127.0.0.1 -p 5300 google.com
+docker compose pull
+docker compose up -d
+docker compose ps
+docker compose logs --tail 100
 ```
 
-升级：`docker compose pull && docker compose up -d`。
+首次启动会自动下载 GFW 规则，生成 `data/gfw.conf` 和 `data/servers.conf`，并按上述配置安装北京时间每天 04:00 的更新任务。检查日志中的下载、合并与启动结果；下载失败时容器仍可能通过健康检查，不能只看 `healthy` 判断 GFW 规则是否就绪。
 
-修改本地脚本或 Docker 配置后，使用 `docker compose up -d --build` 构建并应用本地版本。首次升级到自定义规则热加载版本需要这样重建一次，并运行下文的 `update.sh` 刷新完整 GFW 缓存；此后修改 `conf/upstreams/*.conf` 会自动生效。
+如下载失败，修复网络或配置后手动重试；如果修改了 `.env`，先执行 `docker compose up -d` 重新读取参数：
+
+```bash
+docker compose exec dnsmasq-chn /opt/dnsmasq-chn/scripts/update.sh
+```
+
+### 5. 验证解析
+
+使用容器自带的 `dig`，无需在宿主机额外安装：
+
+```bash
+docker compose exec dnsmasq-chn dig @127.0.0.1 baidu.com
+docker compose exec dnsmasq-chn dig @127.0.0.1 google.com
+```
+
+其他机器安装了 `dig` 时，可将 `新服务器IP` 替换为实际地址，测试对外端口：
+
+```bash
+dig @新服务器IP -p 5300 google.com
+```
+
+### 6. 添加或迁移自定义规则
+
+镜像包含程序和主配置，手工规则由宿主机提供。要沿用现有规则，将旧部署中 `conf/upstreams/*.conf` 复制到新机器的 `/opt/dnsmasq-chn/conf/upstreams/`，并调整其中的上游地址；镜像不会自动带入仓库中的 `customize.conf`、`ulock.conf`。
+
+也可自行创建 `/opt/dnsmasq-chn/conf/upstreams/work.conf`，填写实际可达的上游，例如：
+
+```ini
+server=/example.com/192.168.1.20#53
+```
+
+保存后自动校验并热加载。支持顶层可见 `.conf` 文件中的 `server=`、`rev-server=` 规则，新增、修改和删除均无需重启。
+
+### 7. 接入客户端与后续升级
+
+普通路由器、手机和电脑填写 DNS 服务器地址时通常使用标准 53 端口。若需直接为这些设备提供解析，确认宿主机 53 端口空闲后，将 `.env` 中的 `DNS_PORT` 改为 `53`，再执行：
+
+```bash
+docker compose up -d
+```
+
+客户端随后填写新服务器 IP。保留 `5300` 时，客户端需要支持显式指定 DNS 端口。
+
+后续升级镜像：
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+部署目录中的 `.env`、`conf/` 和 `data/` 会保留。
+
+已有源码时，修改本地脚本、`dnsmasq.conf` 或 Dockerfile 后，使用 `docker compose up -d --build` 构建并应用本地版本。旧部署首次升级到自定义规则热加载版本后，还需运行一次 `update.sh` 刷新完整 GFW 缓存；此后修改 `conf/upstreams/*.conf` 会自动生效。
 
 ## 配置 (`.env`)
 
