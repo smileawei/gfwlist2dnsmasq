@@ -45,6 +45,7 @@ dnsmasq-chn/
 │   ├── reload.sh               离线合并、校验、原子发布规则并发送 SIGHUP
 │   └── watch-upstreams.sh      监视手工规则的保存、增删和重命名
 ├── tests/
+│   ├── test_entrypoint.py      启动校验与错误规则不触发下载的回归测试
 │   ├── test_gfwlist_generator.sh 规则转换和下载失败处理测试
 │   ├── test_update.py          更新脚本与重载脚本衔接测试
 │   └── test_reload.py          规则合并、错误保留和热加载测试
@@ -355,3 +356,26 @@ ports:
 ```
 
 宿主自己继续走 systemd-resolved 的 127.0.0.53，外部客户端走 53。
+
+## 更新记录
+
+### 2026-11-11：依赖安全升级与启动校验修复
+
+本次功能更新镜像：`smileawei/gfwlist2dnsmasq:sha-8c4f448`，支持 amd64 / arm64。部署端已更新测试，反馈运行正常。
+
+- 基础镜像从 Alpine 3.21 升级到 3.24；本次发布使用 Alpine 3.24.4。
+- 构建时先执行 `apk upgrade --no-cache`，同步更新基础镜像继承的依赖。本次发布的 curl 为 8.23.0，zlib 为 1.4。
+- 移除 `bind-tools` 及其附带依赖，运行时安装包由 45 个减少到 33 个。容器内查询与健康检查改用 BusyBox `nslookup`，不再提供 `dig`；宿主机上的 `dig` 使用方式不变。
+- 启动时先校验本地手工规则，再决定是否下载 GFW 列表。首次配置错误会在下载前退出，避免容器反复重启时重复请求下载源；已有合法生效快照时继续使用原快照。
+- 新增启动校验回归测试，覆盖非法指令、错误端口、缺失规则目录和已有缓存保留。
+
+验证结果：两个架构均完成构建、23 项 Python 回归测试及规则生成测试；amd64 实际容器的 TCP/UDP DNS、健康检查、规则热加载、下载失败保留及 cron 更新均通过。默认 HTTPS 下载源生成 4,452 条规则，并通过 dnsmasq 语法校验。本地 arm64 使用 QEMU 验证，模拟器进程名会影响自动热加载的进程身份检查，因此未将该项视为原生 arm64 验证通过。
+
+发布前使用 Docker Scout 复扫，两个架构均从旧镜像的 45 项告警（7 严重、19 高危、13 中危、6 低危）降至 1 项高危；旧镜像的 45 项告警均不再出现。剩余 `CVE-2026-107891` 涉及 musl，Scout 要求 `1.2.6-r6`，但 [Alpine 官方安全记录](https://security.alpinelinux.org/vuln/CVE-2026-107891) 标记 3.24 分支的 `1.2.6-r3` 已修复，判断为疑似分支版本匹配误报，未添加忽略规则。同次 Trivy 扫描两个架构均为 0 漏洞、0 密钥泄漏；结果仅代表本次扫描时的漏洞库状态。
+
+使用 `latest` 的部署可更新镜像后重新创建容器；固定标签的部署请先修改 Compose 中的 `image`：
+
+```bash
+docker compose pull
+docker compose up -d --no-build
+```
