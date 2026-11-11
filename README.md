@@ -16,7 +16,7 @@ client → dnsmasq ──┼─ GFW 域名 ─→ GFW_UPSTREAM_IP:GFW_UPSTREAM_P
 ```
 
 - 容器启动时 entrypoint 把 `$DEFAULT_UPSTREAM` 写到 `/etc/dnsmasq.d/00-upstream.conf`
-- `data/gfw.conf` 保存完整的 GFW 规则缓存。启动时已有非空缓存会直接复用，缺失或为空时才尝试下载。
+- `data/gfw.conf` 保存完整的 GFW 规则缓存。启动时先校验本地手工规则，已有非空缓存会直接复用，缺失或为空时才尝试下载。首次手工规则错误会在下载前报错，避免自动重启时反复请求下载地址。
 - 手工转发规则统一放在 `conf/upstreams/`，只读取顶层可见的 `*.conf` 文件。`reload.sh` 合并这些规则与 GFW 缓存，排除与手工域名及其子域冲突的 GFW 规则，生成 `data/servers.conf`。
 - dnsmasq 通过 `servers-file=` 读取 `servers.conf`。目录监视程序检测保存、新增、删除和重命名操作，校验成功后原子替换此文件并发送 SIGHUP；自定义规则通常在几秒内生效，无需重启容器，也不依赖重新下载 gfwlist。
 - 容器内 BusyBox crond 按 `$UPDATE_CRON` 运行 `update.sh`：下载完整 GFW 规则，再调用同一个 `reload.sh` 合并并热加载。发布文件权限为 `0644`；下载或校验失败时保留旧生效规则。
@@ -97,9 +97,9 @@ $EDITOR .env
 docker compose up -d --build       # 本地 build
 docker compose pull && docker compose up -d   # 从 Docker Hub 拉镜像
 
-# 3. 使用容器自带的 dig 测试
-docker compose exec dnsmasq-chn dig @127.0.0.1 baidu.com    # 默认上游
-docker compose exec dnsmasq-chn dig @127.0.0.1 google.com   # GFW 上游
+# 3. 使用容器自带的 nslookup 测试
+docker compose exec dnsmasq-chn nslookup baidu.com 127.0.0.1    # 默认上游
+docker compose exec dnsmasq-chn nslookup google.com 127.0.0.1   # GFW 上游
 ```
 
 ## 全新部署（使用已发布镜像）
@@ -167,7 +167,7 @@ docker compose ps
 docker compose logs --tail 100
 ```
 
-首次启动会自动下载 GFW 规则，生成 `data/gfw.conf` 和 `data/servers.conf`，并按上述配置安装北京时间每天 04:00 的更新任务。检查日志中的下载、合并与启动结果；下载失败时容器仍可能通过健康检查，不能只看 `healthy` 判断 GFW 规则是否就绪。
+首次启动会先校验本地手工规则，通过后自动下载 GFW 规则，生成 `data/gfw.conf` 和 `data/servers.conf`，并按上述配置安装北京时间每天 04:00 的更新任务。检查日志中的下载、合并与启动结果；下载失败时容器仍可能通过健康检查，不能只看 `healthy` 判断 GFW 规则是否就绪。
 
 如下载失败，修复网络或配置后手动重试；如果修改了 `.env`，先执行 `docker compose up -d` 重新读取参数：
 
@@ -177,11 +177,11 @@ docker compose exec dnsmasq-chn /opt/dnsmasq-chn/scripts/update.sh
 
 ### 5. 验证解析
 
-使用容器自带的 `dig`，无需在宿主机额外安装：
+使用容器自带的 BusyBox `nslookup`，无需在宿主机额外安装。镜像不再安装 `bind-tools`，以减少运行时依赖：
 
 ```bash
-docker compose exec dnsmasq-chn dig @127.0.0.1 baidu.com
-docker compose exec dnsmasq-chn dig @127.0.0.1 google.com
+docker compose exec dnsmasq-chn nslookup baidu.com 127.0.0.1
+docker compose exec dnsmasq-chn nslookup google.com 127.0.0.1
 ```
 
 其他机器安装了 `dig` 时，可将 `新服务器IP` 替换为实际地址，测试对外端口：
