@@ -36,18 +36,22 @@ fi
 } > "$CONF_DIR/00-upstream.conf"
 echo "[entrypoint] wrote 00-upstream.conf with: $DEFAULT_UPSTREAM"
 
-# Reuse the downloaded cache, or fetch it before the first startup.
-if [ ! -f "$CONF_DIR/gfw.conf" ] || [ ! -s "$CONF_DIR/gfw.conf" ]; then
-  echo "[entrypoint] gfw.conf missing/empty, running initial update..."
-  "$SCRIPT_DIR/update.sh" --no-reload || {
-    echo "[entrypoint] initial update failed; touching empty gfw.conf so dnsmasq can start"
-    : > "$CONF_DIR/gfw.conf"
-  }
+# Validate local rules before downloading. A bad fresh deployment may restart
+# repeatedly; it must not fetch the list on every failed startup.
+if [ ! -f "$CONF_DIR/gfw.conf" ]; then
+  touch "$CONF_DIR/gfw.conf"
 fi
 chmod 0644 "$CONF_DIR/gfw.conf"
 # Always render the current manual files on startup, including when reusing a
 # downloaded cache. Invalid files must never replace a working server snapshot.
-if ! "$SCRIPT_DIR/reload.sh" --no-reload; then
+if "$SCRIPT_DIR/reload.sh" --no-reload; then
+  if [ ! -s "$CONF_DIR/gfw.conf" ]; then
+    echo "[entrypoint] gfw.conf missing/empty, running initial update..."
+    "$SCRIPT_DIR/update.sh" --no-reload || {
+      echo "[entrypoint] initial update failed; starting with the validated local rules"
+    }
+  fi
+else
   if [ -f "$CONF_DIR/servers.conf" ] &&
      dnsmasq --test --conf-file="$CONF_DIR/servers.conf"; then
     echo "[entrypoint] invalid new rules; starting with the previous servers.conf" >&2
